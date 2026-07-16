@@ -6,6 +6,7 @@ const connectionSchema = new mongoose.Schema({
   siteUrl: { type: String, required: true, trim: true },
   installationId: { type: String, required: true },
   encryptedApiToken: { type: String, required: true },
+  moduleApiUrl: { type: String },
   active: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now },
 });

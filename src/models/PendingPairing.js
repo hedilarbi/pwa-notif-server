@@ -6,6 +6,7 @@ const pendingPairingSchema = new mongoose.Schema({
   platform: { type: String, required: true },
   siteName: { type: String, required: true },
   siteUrl: { type: String, required: true },
+  moduleApiUrl: { type: String },
   status: { type: String, enum: ["pending", "linked"], default: "pending" },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   connectionId: { type: mongoose.Schema.Types.ObjectId },

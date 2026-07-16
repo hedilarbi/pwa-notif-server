@@ -36,7 +36,7 @@ function buildPairingUrl(pairing, secret) {
 // Called by the platform module (e.g. PrestaShop) to start a pairing.
 router.post("/pairings", async (req, res) => {
   try {
-    const { platform, siteName, siteUrl } = req.body;
+    const { platform, siteName, siteUrl, apiUrl } = req.body;
     if (!platform || !ALLOWED_PLATFORMS.includes(platform)) {
       return res.status(400).json({ message: "Invalid or missing platform" });
     }
@@ -53,6 +53,7 @@ router.post("/pairings", async (req, res) => {
       platform,
       siteName,
       siteUrl,
+      moduleApiUrl: apiUrl,
     });
 
     res.status(201).json({
@@ -128,6 +129,7 @@ router.post("/link", auth, async (req, res) => {
       platform: pairing.platform,
       siteName: pairing.siteName,
       siteUrl: pairing.siteUrl,
+      moduleApiUrl: pairing.moduleApiUrl,
       installationId,
       encryptedApiToken,
       active: true,
@@ -213,11 +215,14 @@ router.delete("/:connectionId", auth, async (req, res) => {
   }
 });
 
-// Read-only order lookups, proxied through to the connected platform module.
-// Only PrestaShop is implemented on the module side today.
+// Read-only order lookups, proxied through to the connected platform
+// module's admin controller (not the front office, so it stays reachable
+// even while the shop is in maintenance mode). Only PrestaShop is
+// implemented on the module side today.
 async function callModuleApi(connection, params) {
   const apiToken = decrypt(connection.encryptedApiToken);
-  const url = `${connection.siteUrl.replace(/\/$/, "")}/index.php?fc=module&module=pwanotifs&controller=api&${params}`;
+  const separator = connection.moduleApiUrl.includes("?") ? "&" : "?";
+  const url = `${connection.moduleApiUrl}${separator}${params}`;
 
   const response = await fetch(url, {
     headers: {
@@ -241,6 +246,10 @@ async function getConnectionOrNotSupported(req, res) {
     res.status(400).json({ message: "Plateforme non supportée pour les commandes" });
     return null;
   }
+  if (!connection.moduleApiUrl) {
+    res.status(409).json({ message: "Reconnectez cette boutique (scannez à nouveau le QR code) pour activer les commandes." });
+    return null;
+  }
   return connection;
 }
 
@@ -251,7 +260,7 @@ router.get("/:connectionId/orders", auth, async (req, res) => {
 
     const response = await callModuleApi(connection, "action=orders");
     if (!response.ok) {
-      return res.status(502).json({ message: "La boutique n'a pas pu être contactée" });
+      return res.status(502).json({ message: "La boutique n'a pas pu être contactée", shopStatus: response.status });
     }
 
     res.json(await response.json());
@@ -270,7 +279,7 @@ router.get("/:connectionId/orders/:orderId", auth, async (req, res) => {
       return res.status(404).json({ message: "Commande introuvable" });
     }
     if (!response.ok) {
-      return res.status(502).json({ message: "La boutique n'a pas pu être contactée" });
+      return res.status(502).json({ message: "La boutique n'a pas pu être contactée", shopStatus: response.status });
     }
 
     res.json(await response.json());
