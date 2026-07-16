@@ -1,10 +1,8 @@
 const express = require("express");
-const crypto = require("crypto");
 const webpush = require("web-push");
 const PushSubscription = require("../models/PushSubscription");
-const User = require("../models/User");
 const auth = require("../middleware/auth");
-const { decrypt } = require("../utils/crypto");
+const { findConnectionByToken } = require("../utils/connectionAuth");
 
 const router = express.Router();
 
@@ -83,29 +81,11 @@ router.post("/notify-connection", async (req, res) => {
     const authHeader = req.headers.authorization || "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
-    if (!installationId || !token) {
-      return res.status(401).json({ message: "Missing installation credentials" });
-    }
-
-    const user = await User.findOne({ "connections.installationId": installationId });
-    const connection = user?.connections.find((c) => c.installationId === installationId);
-    if (!connection) {
-      return res.status(401).json({ message: "Unknown installation" });
-    }
-
-    let expectedToken;
-    try {
-      expectedToken = decrypt(connection.encryptedApiToken);
-    } catch {
-      return res.status(500).json({ message: "Invalid stored credentials" });
-    }
-
-    const provided = Buffer.from(token);
-    const expected = Buffer.from(expectedToken);
-    const valid = provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
-    if (!valid || !connection.active) {
+    const match = await findConnectionByToken(installationId, token);
+    if (!match || !match.connection.active) {
       return res.status(401).json({ message: "Invalid installation credentials" });
     }
+    const { user, connection } = match;
 
     const { title, body } = req.body;
     const subscriptions = await PushSubscription.find({ userId: user._id });

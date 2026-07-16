@@ -5,6 +5,7 @@ const User = require("../models/User");
 const PendingPairing = require("../models/PendingPairing");
 const auth = require("../middleware/auth");
 const { encrypt, decrypt } = require("../utils/crypto");
+const { findConnectionByToken } = require("../utils/connectionAuth");
 
 const router = express.Router();
 
@@ -175,6 +176,28 @@ router.get("/", auth, async (req, res) => {
   }
 });
 
+// Called by the platform module on uninstall, authenticated with its own
+// installationId + apiToken (no user session available at that point).
+router.delete("/by-installation/:installationId", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+
+    const match = await findConnectionByToken(req.params.installationId, token);
+    if (!match) {
+      return res.status(401).json({ message: "Invalid installation credentials" });
+    }
+
+    const { user, connection } = match;
+    connection.deleteOne();
+    await user.save();
+
+    res.json({ message: "Connexion supprimée" });
+  } catch (err) {
+    res.status(500).json({ message: "Suppression échouée", error: err.message });
+  }
+});
+
 router.delete("/:connectionId", auth, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -187,6 +210,72 @@ router.delete("/:connectionId", auth, async (req, res) => {
     res.json({ message: "Connexion supprimée" });
   } catch (err) {
     res.status(500).json({ message: "Suppression échouée", error: err.message });
+  }
+});
+
+// Read-only order lookups, proxied through to the connected platform module.
+// Only PrestaShop is implemented on the module side today.
+async function callModuleApi(connection, params) {
+  const apiToken = decrypt(connection.encryptedApiToken);
+  const url = `${connection.siteUrl.replace(/\/$/, "")}/index.php?fc=module&module=pwanotifs&controller=api&${params}`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      "X-Pwanotifs-Token": apiToken,
+    },
+    signal: AbortSignal.timeout(10000),
+  });
+
+  return response;
+}
+
+async function getConnectionOrNotSupported(req, res) {
+  const user = await User.findById(req.userId);
+  const connection = user.connections.id(req.params.connectionId);
+  if (!connection) {
+    res.status(404).json({ message: "Connexion introuvable" });
+    return null;
+  }
+  if (connection.platform !== "prestashop") {
+    res.status(400).json({ message: "Plateforme non supportée pour les commandes" });
+    return null;
+  }
+  return connection;
+}
+
+router.get("/:connectionId/orders", auth, async (req, res) => {
+  try {
+    const connection = await getConnectionOrNotSupported(req, res);
+    if (!connection) return;
+
+    const response = await callModuleApi(connection, "action=orders");
+    if (!response.ok) {
+      return res.status(502).json({ message: "La boutique n'a pas pu être contactée" });
+    }
+
+    res.json(await response.json());
+  } catch (err) {
+    res.status(500).json({ message: "Échec de récupération des commandes", error: err.message });
+  }
+});
+
+router.get("/:connectionId/orders/:orderId", auth, async (req, res) => {
+  try {
+    const connection = await getConnectionOrNotSupported(req, res);
+    if (!connection) return;
+
+    const response = await callModuleApi(connection, `action=order&id=${encodeURIComponent(req.params.orderId)}`);
+    if (response.status === 404) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+    if (!response.ok) {
+      return res.status(502).json({ message: "La boutique n'a pas pu être contactée" });
+    }
+
+    res.json(await response.json());
+  } catch (err) {
+    res.status(500).json({ message: "Échec de récupération de la commande", error: err.message });
   }
 });
 
