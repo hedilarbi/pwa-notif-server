@@ -247,7 +247,7 @@ async function callModuleApi(connection, actionParams) {
   const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${apiToken}`,
-      "X-Pwanotifs-Token": apiToken,
+      "X-Notifly-Token": apiToken,
     },
     signal: AbortSignal.timeout(10000),
   });

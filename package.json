@@ -1,5 +1,5 @@
 {
-  "name": "pwa-notifs-backend",
+  "name": "notifly-backend",
   "version": "1.0.0",
   "description": "Backend API for PWA push notifications demo",
   "main": "src/server.js",
