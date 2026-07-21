@@ -215,14 +215,34 @@ router.delete("/:connectionId", auth, async (req, res) => {
   }
 });
 
-// Read-only order lookups, proxied through to the connected platform
-// module's admin controller (not the front office, so it stays reachable
-// even while the shop is in maintenance mode). Only PrestaShop is
-// implemented on the module side today.
-async function callModuleApi(connection, params) {
+// Read-only order lookups, proxied through to the connected platform's own
+// module/plugin API. Each platform exposes this differently, so the URL
+// shape is built per platform here — the frontend only ever calls our own
+// generic /:connectionId/orders[/:orderId] routes and stays unaware of
+// the difference.
+const PLATFORMS_WITH_ORDERS = ["prestashop", "woocommerce"];
+
+function buildModuleApiUrl(connection, { action, orderId }) {
+  const base = connection.moduleApiUrl.replace(/\/$/, "");
+  const separator = base.includes("?") ? "&" : "?";
+
+  if (connection.platform === "woocommerce") {
+    // WordPress REST API: single route, order id as a query param (see
+    // the plugin's register_rest_route for /orders). Query params are
+    // used instead of a /orders/:id path segment because rest_url()
+    // returns a "?rest_route=..." URL on sites without pretty permalinks,
+    // which can't have a path segment appended after it.
+    return action === "orders" ? base : `${base}${separator}id=${encodeURIComponent(orderId)}`;
+  }
+
+  // PrestaShop: query-string based front controller.
+  const params = action === "orders" ? "action=orders" : `action=order&id=${encodeURIComponent(orderId)}`;
+  return `${base}${separator}${params}`;
+}
+
+async function callModuleApi(connection, actionParams) {
   const apiToken = decrypt(connection.encryptedApiToken);
-  const separator = connection.moduleApiUrl.includes("?") ? "&" : "?";
-  const url = `${connection.moduleApiUrl}${separator}${params}`;
+  const url = buildModuleApiUrl(connection, actionParams);
 
   const response = await fetch(url, {
     headers: {
@@ -242,7 +262,7 @@ async function getConnectionOrNotSupported(req, res) {
     res.status(404).json({ message: "Connexion introuvable" });
     return null;
   }
-  if (connection.platform !== "prestashop") {
+  if (!PLATFORMS_WITH_ORDERS.includes(connection.platform)) {
     res.status(400).json({ message: "Plateforme non supportée pour les commandes" });
     return null;
   }
@@ -258,7 +278,7 @@ router.get("/:connectionId/orders", auth, async (req, res) => {
     const connection = await getConnectionOrNotSupported(req, res);
     if (!connection) return;
 
-    const response = await callModuleApi(connection, "action=orders");
+    const response = await callModuleApi(connection, { action: "orders" });
     if (!response.ok) {
       return res.status(502).json({ message: "La boutique n'a pas pu être contactée", shopStatus: response.status });
     }
@@ -274,7 +294,7 @@ router.get("/:connectionId/orders/:orderId", auth, async (req, res) => {
     const connection = await getConnectionOrNotSupported(req, res);
     if (!connection) return;
 
-    const response = await callModuleApi(connection, `action=order&id=${encodeURIComponent(req.params.orderId)}`);
+    const response = await callModuleApi(connection, { action: "order", orderId: req.params.orderId });
     if (response.status === 404) {
       return res.status(404).json({ message: "Commande introuvable" });
     }
